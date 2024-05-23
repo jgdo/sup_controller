@@ -1,25 +1,31 @@
-#include <TFT_eSPI.h>
+#include <Arduino.h>
+#include <ESP32Servo.h>
 
-TFT_eSPI tft{};
+static constexpr int STEERING_ADC_PIN = 34;
+static constexpr int STEERING_SERVO_PIN = 14;
+
+Servo steeringServo;
 
 void setup()
 {
   Serial.begin(115200);
-  Serial.println("setup() start");
+  steeringServo.attach(STEERING_SERVO_PIN);
 
-  tft.init();
-  tft.setRotation(0);
-  tft.fillScreen(TFT_GREEN);
-  tft.setTextColor(TFT_BLACK);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(1);
-
-  tft.drawString("--- FooBar ---", tft.width() / 2, tft.height() / 2 - 16);
-
-  Serial.println("setup() end");
+  Serial.println("setup()");
 }
 
 void loop()
 {
-  // put your main code here, to run repeatedly:
+  const auto milliV = analogReadMilliVolts(STEERING_ADC_PIN);
+  const auto adcRaw = analogRead(STEERING_ADC_PIN);
+
+  const int angle = (adcRaw * 180 + 2048) / 4095;
+  steeringServo.write(angle);
+
+  Serial.println("-----------");
+  Serial.printf("ADC raw: %4d\n", adcRaw);
+  Serial.printf("mV: %.4f\n", milliV/1000.0F);
+  Serial.printf("angle: %d\n", angle);
+
+  delay(20);
 }
