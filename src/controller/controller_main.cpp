@@ -53,6 +53,7 @@ void setup()
   tft.setTextPadding(100);
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(1);
+  tft.println("Connecting with SUP ...");
 
   // tft.drawString("--- ADC ---", tft.width() / 2, tft.height() / 2 - 16);
 
@@ -78,7 +79,7 @@ void loop()
   SerialBT.printf("s %d\n", angle);
   SerialBT.printf("p %d\n", power);
 
-  tft.setCursor(0, 100);
+  tft.setCursor(0, 120);
   tft.printf("Pr: %4d    \n", powerRaw);
   tft.printf("Sr: %4d    \n", steeringRaw);
   tft.printf("Pa: %4d    \n", power);
