@@ -1,6 +1,8 @@
-#include <BluetoothSerial.h>
+#include <ArduinoBLE.h>
 #include <TFT_eSPI.h>
 
+BLEService controllerService("1101");
+BLEUnsignedIntCharacteristic controlCharacteristic("2101", BLERead | BLENotify);
 
 #include "bt_settings.h"
 
@@ -37,7 +39,6 @@ private:
 Joystick steeringJoystick{STEERING_ADC_PIN, 1200, 2260};
 Joystick powerJoystick{PIN_POWER_ADC, 900, 1720};
 
-BluetoothSerial SerialBT;
 TFT_eSPI tft;
 
 void setup()
@@ -54,37 +55,74 @@ void setup()
   tft.setTextPadding(100);
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(1);
-  tft.println("Connecting with SUP ...");
 
-  // tft.drawString("--- ADC ---", tft.width() / 2, tft.height() / 2 - 16);
+  if (!BLE.begin())
+  {
+    Serial.println("starting BLE failed!");
+    tft.println("Starting BLE failed!");
+    while (1)
+      ;
+  }
 
-  // tft.setCursor(0, 100);
-  // tft.printf("Connecting to %s ...\n", BT_NAME_MOTOR);
+  BLE.setLocalName(BT_NAME_CONTOLLER);
+  BLE.setAdvertisedService(controllerService);
+  controllerService.addCharacteristic(controlCharacteristic);
+  BLE.addService(controllerService);
 
-  SerialBT.begin(BT_NAME_CONTOLLER, true);
-  const auto connected = SerialBT.connect(BT_NAME_MOTOR);
-
-  const auto conStr = connected ? "Connected" : "Not connected";
-  tft.println(conStr);
+  BLE.advertise();
+  Serial.println("Bluetooth device active, waiting for connections...");
 
   Serial.println("setup() end");
 }
 
 void loop()
 {
+  BLEDevice central = BLE.central();
+
+  if (central)
+  {
+    Serial.print("Connected to central: ");
+    Serial.println(central.address());
+
+    tft.setCursor(0, 0);
+    tft.printf("BLE connected %s", central.address().c_str());
+
+    while (central.connected())
+    {
+      const auto steeringRaw = analogRead(STEERING_ADC_PIN);
+      const auto powerRaw = analogRead(PIN_POWER_ADC);
+
+      const auto angle = steeringJoystick.readPercent() * 180 / 100;
+      const auto power = 100 - powerJoystick.readPercent();
+
+      tft.setCursor(0, 120);
+      tft.printf("Pr: %4d    \n", powerRaw);
+      tft.printf("Sr: %4d    \n", steeringRaw);
+      tft.printf("Pa: %4d    \n", power);
+      tft.printf("Sa: %4d    \n", angle);
+
+      ControlUnion control;
+      control.values.powerPercent = power;
+      control.values.steeringAngleDeg = angle;
+      controlCharacteristic.writeValue(control.bleValue);
+
+      delay(100);
+    }
+  }
+
+  tft.setCursor(0, 0);
+  tft.print("BLE disconnected                                      ");
+
   const auto steeringRaw = analogRead(STEERING_ADC_PIN);
   const auto powerRaw = analogRead(PIN_POWER_ADC);
 
   const auto angle = steeringJoystick.readPercent() * 180 / 100;
   const auto power = 100 - powerJoystick.readPercent();
-  SerialBT.printf("s %d\n", angle);
-  SerialBT.printf("p %d\n", power);
 
   tft.setCursor(0, 120);
   tft.printf("Pr: %4d    \n", powerRaw);
   tft.printf("Sr: %4d    \n", steeringRaw);
   tft.printf("Pa: %4d    \n", power);
   tft.printf("Sa: %4d    \n", angle);
-
   delay(100);
 }
