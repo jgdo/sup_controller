@@ -5,10 +5,9 @@
 #include "bt_settings.h"
 #include <sstream>
 
-static constexpr int STEERING_ADC_PIN = 34;
 static constexpr int CURRENT_SENSING_ADC_PIN = 39;
-static constexpr int STEERING_SERVO_PIN = 14;
-static constexpr int POWER_SERVO_PIN = 27;
+static constexpr int RUDDER_SERVO_PIN = 14;
+static constexpr int MOTOR_SERVO_PIN = 27;
 
 static constexpr long POWER_RECEIVE_TIMEOUT_MS = 500;
 
@@ -40,8 +39,8 @@ void setup()
   SerialBT.register_callback(Bt_Status);
   SerialBT.begin(BT_NAME_MOTOR);
 
-  steeringServo.attach(STEERING_SERVO_PIN, 1000, 2000);
-  powerServo.attach(POWER_SERVO_PIN, 1000, 2000);
+  steeringServo.attach(RUDDER_SERVO_PIN, 1000, 2000);
+  powerServo.attach(MOTOR_SERVO_PIN, 1000, 2000);
 
   Serial.println("setup() done.");
 }

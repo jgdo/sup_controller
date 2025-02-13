@@ -1,10 +1,11 @@
 #include <BluetoothSerial.h>
 #include <TFT_eSPI.h>
 
+
 #include "bt_settings.h"
 
-static constexpr int STEERING_ADC_PIN = 25;
-static constexpr int POWER_ADC_PIN = 33;
+static constexpr int STEERING_ADC_PIN = 33;
+static constexpr int PIN_POWER_ADC = 32;
 
 class Joystick
 {
@@ -28,13 +29,13 @@ public:
   }
 
 private:
-  int mAdcPin;
-  int mMinValue;
-  int mMaxValue;
+  const int mAdcPin;
+  const int mMinValue;
+  const int mMaxValue;
 };
 
-Joystick steeringJoystick{STEERING_ADC_PIN, 1320, 2390};
-Joystick powerJoystick{POWER_ADC_PIN, 1790, 2500};
+Joystick steeringJoystick{STEERING_ADC_PIN, 1200, 2260};
+Joystick powerJoystick{PIN_POWER_ADC, 900, 1720};
 
 BluetoothSerial SerialBT;
 TFT_eSPI tft;
@@ -72,10 +73,10 @@ void setup()
 void loop()
 {
   const auto steeringRaw = analogRead(STEERING_ADC_PIN);
-  const auto powerRaw = analogRead(POWER_ADC_PIN);
+  const auto powerRaw = analogRead(PIN_POWER_ADC);
 
   const auto angle = steeringJoystick.readPercent() * 180 / 100;
-  const auto power = powerJoystick.readPercent() * 180 / 100;
+  const auto power = 100 - powerJoystick.readPercent();
   SerialBT.printf("s %d\n", angle);
   SerialBT.printf("p %d\n", power);
 
