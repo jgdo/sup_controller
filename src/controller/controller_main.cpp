@@ -1,8 +1,10 @@
 #include <ArduinoBLE.h>
 #include <TFT_eSPI.h>
 
-BLEService controllerService("1101");
-BLEUnsignedIntCharacteristic controlCharacteristic("2101", BLERead | BLENotify);
+#include "bt_settings.h"
+
+BLEService controllerService(BLE_UUID);
+BLEUnsignedIntCharacteristic controlCharacteristic(BLE_CONTROL_CHARACTERISTICS, BLERead | BLENotify);
 
 #include "bt_settings.h"
 

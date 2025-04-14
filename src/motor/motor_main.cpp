@@ -1,46 +1,40 @@
+#include <sstream>
+#include <optional>
+
 #include <Arduino.h>
 #include <ESP32Servo.h>
-#include <BluetoothSerial.h>
+#include <ArduinoBLE.h>
 
 #include "bt_settings.h"
-#include <sstream>
 
 static constexpr int CURRENT_SENSING_ADC_PIN = 39;
 static constexpr int RUDDER_SERVO_PIN = 14;
 static constexpr int MOTOR_SERVO_PIN = 27;
 
 static constexpr long POWER_RECEIVE_TIMEOUT_MS = 500;
+static constexpr float CONTROL_FREQ = 50.0f;
 
 Servo steeringServo, powerServo;
-BluetoothSerial SerialBT;
-
-void Bt_Status(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
-{
-
-  if (event == ESP_SPP_SRV_OPEN_EVT)
-  {
-    Serial.println("Client Connected");
-  }
-
-  else if (event == ESP_SPP_CLOSE_EVT)
-  {
-    Serial.println("Client Disconnected");
-  }
-
-  else
-  {
-    Serial.println("Other BT event");
-  }
-}
 
 void setup()
 {
   Serial.begin(115200);
-  SerialBT.register_callback(Bt_Status);
-  SerialBT.begin(BT_NAME_MOTOR);
 
   steeringServo.attach(RUDDER_SERVO_PIN, 1000, 2000);
   powerServo.attach(MOTOR_SERVO_PIN, 1000, 2000);
+  powerServo.write(0);
+
+  if (!BLE.begin())
+  {
+    Serial.println("starting BLE failed!");
+    while (1)
+      ;
+  }
+
+  Serial.println("Started BLE.");
+
+  Serial.println("Canning for service ...");
+  BLE.scanForUuid(BLE_UUID);
 
   Serial.println("setup() done.");
 }
@@ -48,95 +42,93 @@ void setup()
 std::array<int, 50> valuesArray;
 int valueCounter = 0;
 
-int steeringAngle = 90;
-int powerAngle = 0;
-long powerLastReceived = -1;
-
-void processBtCommand(const std::string &cmd)
+std::optional<Control> readCharacteristicValue(BLECharacteristic &characteristic)
 {
-  // std::stringstream input{cmd};
-  std::string segment;
-
-  if (strncmp(cmd.c_str(), "s ", 2) == 0)
-  {
-    sscanf(cmd.c_str(), "s %d", &steeringAngle);
-    Serial.printf("Setting steering angle from bluetooth: %d\n", steeringAngle);
-  }
-  else if (strncmp(cmd.c_str(), "p ", 2) == 0)
-  {
-    sscanf(cmd.c_str(), "p %d", &powerAngle);
-    powerLastReceived = millis();
-    Serial.printf("Setting power angle from bluetooth: %d\n", powerAngle);
+  ControlUnion control;
+  if(characteristic.readValue(control.bleValue) == 0) {
+    return std::nullopt;
   }
 
-  // if (!std::getline(input, segment, ' '))
-  // {
-  //   return;
-  // }
-
-  // if (segment == "s")
-  // {
-  //   if (!std::getline(input, segment, ' '))
-  //   {
-  //     return;
-  //   }
-
-  //   steeringAngle = std::stoi(segment);
-  //   Serial.printf("Setting steering angle from bluetooth: %d\n", steeringAngle);
-  // }
-}
-
-void processBtCommands()
-{
-  static constexpr auto MAX_BT_BUF_LEN = 100;
-  static std::string buffer;
-
-  while (SerialBT.available())
-  {
-    const auto chr = SerialBT.read();
-    if (chr < 0)
-    {
-      return; // should not happen
-    }
-
-    if (chr == '\n')
-    {
-      processBtCommand(buffer);
-      buffer.clear();
-    }
-    else
-    {
-      buffer.push_back(chr);
-    }
-  }
+  return control.values;
 }
 
 void loop()
 {
-  processBtCommands();
+  BLEDevice peripheral = BLE.available();
 
-  if(millis() > powerLastReceived + POWER_RECEIVE_TIMEOUT_MS) {
-    powerAngle = 0;
-  }
-
-  steeringServo.write(steeringAngle);
-  powerServo.write(powerAngle);
-
-  const auto currentAdc = analogRead(CURRENT_SENSING_ADC_PIN);
-  valuesArray[valueCounter++] = currentAdc;
-  if (valueCounter >= valuesArray.size())
+  if (peripheral)
   {
-    valueCounter = 0;
-  }
+    // discovered a peripheral, print out address, local name, and advertised service
+    Serial.print("Found ");
+    Serial.print(peripheral.address());
+    Serial.print(" '");
+    Serial.print(peripheral.localName());
+    Serial.print("' ");
+    Serial.print(peripheral.advertisedServiceUuid());
+    Serial.println();
+    BLE.stopScan();
 
-  int sum = 0;
-  for (auto v : valuesArray)
+    if (peripheral.localName() != BT_NAME_CONTOLLER)
+    {
+      Serial.println("controller name does not match, ignoring");
+      return;
+    }
+
+    peripheral.connect();
+
+    peripheral.discoverAttributes();
+    BLEService service = peripheral.service(BLE_UUID);
+    Serial.print("Service ");
+    Serial.print(service.uuid());
+    BLECharacteristic characteristic = service.characteristic(BLE_CONTROL_CHARACTERISTICS);
+
+    Serial.print("\tCharacteristic ");
+    Serial.println(characteristic.uuid());
+    Serial.printf("Characteristics size: %d\n", characteristic.valueSize());
+    Serial.printf("Characteristics can read: %d\n", characteristic.canRead());
+
+    while (peripheral)
+    {
+      const auto optInput = readCharacteristicValue(characteristic);
+      if(!optInput) {
+        break;
+      }
+
+      const auto input = *optInput;
+
+      steeringServo.write(input.steeringAngleDeg);
+      powerServo.write(input.powerPercent * 180 / 100);
+
+      const auto currentAdc = analogRead(CURRENT_SENSING_ADC_PIN);
+      valuesArray[valueCounter++] = currentAdc;
+      if (valueCounter >= valuesArray.size())
+      {
+        valueCounter = 0;
+      }
+
+      int sum = 0;
+      for (auto v : valuesArray)
+      {
+        sum += v;
+      }
+
+      sum = (sum + valuesArray.size() / 2) / valuesArray.size();
+
+      Serial.printf("Current adc %4d, power: %4d, steering: %4d\n", sum, input.powerPercent, input.steeringAngleDeg);
+    }
+
+    powerServo.write(0);
+
+    Serial.println("ble controller disconnected, stopping.");
+
+    Serial.println("Canning for service ...");
+    BLE.scanForUuid(BLE_UUID);
+  }
+  else
   {
-    sum += v;
+    Serial.println("ble service not available");
   }
 
-  sum = (sum + valuesArray.size() / 2) / valuesArray.size();
-
-  Serial.printf("Current adc %4d, power: %4d, steering: %4d\n", sum, powerAngle, steeringAngle);
-  delay(20);
+  powerServo.write(0);
+  delay(500);
 }
