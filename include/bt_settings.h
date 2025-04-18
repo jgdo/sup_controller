@@ -5,6 +5,7 @@ static constexpr auto BT_NAME_MOTOR = "sup_board_motor";
 
 static_assert(sizeof(unsigned int) == 4);
 
+// Remote to motor
 struct Control
 {
     uint8_t powerPercent;
@@ -20,6 +21,15 @@ union ControlUnion
 };
 static_assert(sizeof(ControlUnion) == 4);
 
-static constexpr auto BLE_UUID = "1101";
+struct PowerStatus {
+    uint32_t motorCurrent_mA;
+    uint32_t usedEnergy_mAh;
+    uint16_t batteryVoltage_mV;
+    uint8_t pading[2];
+};
+static_assert(sizeof(PowerStatus) == 12);
+
+static constexpr auto BLE_UUID = "91ef32e7-bdb7-45c8-9434-6bd2f665e2c3";
 
 static constexpr auto BLE_CONTROL_CHARACTERISTICS = "2101";
+static constexpr auto BLE_POWER_STATUS_CHARACTERISTICS = "1210";

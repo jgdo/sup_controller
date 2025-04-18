@@ -20,6 +20,8 @@ void setup()
 {
   Serial.begin(115200);
 
+  pinMode(LED_BUILTIN, OUTPUT);
+
   steeringServo.attach(RUDDER_SERVO_PIN, 1000, 2000);
   powerServo.attach(MOTOR_SERVO_PIN, 1000, 2000);
   powerServo.write(0);
@@ -39,21 +41,29 @@ void setup()
   Serial.println("setup() done.");
 }
 
-std::array<int, 50> valuesArray;
+std::array<int, 16> valuesArray;
 int valueCounter = 0;
 
-std::optional<Control> readCharacteristicValue(BLECharacteristic &characteristic)
+std::optional<Control> readControl(BLECharacteristic &characteristic)
 {
   ControlUnion control;
-  if(characteristic.readValue(control.bleValue) == 0) {
+  if (characteristic.readValue(control.bleValue) == 0)
+  {
     return std::nullopt;
   }
 
   return control.values;
 }
 
+void sendStatus(BLECharacteristic &characteristic, const PowerStatus &status)
+{
+  characteristic.writeValue((uint8_t *)&status, sizeof(status));
+}
+
 void loop()
 {
+  digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+
   BLEDevice peripheral = BLE.available();
 
   if (peripheral)
@@ -70,7 +80,8 @@ void loop()
 
     if (peripheral.localName() != BT_NAME_CONTOLLER)
     {
-      Serial.println("controller name does not match, ignoring");
+      Serial.println("Remote name does not match, ignoring");
+      sleep(500);
       return;
     }
 
@@ -80,17 +91,24 @@ void loop()
     BLEService service = peripheral.service(BLE_UUID);
     Serial.print("Service ");
     Serial.print(service.uuid());
-    BLECharacteristic characteristic = service.characteristic(BLE_CONTROL_CHARACTERISTICS);
+    BLECharacteristic controlCharacteristic = service.characteristic(BLE_CONTROL_CHARACTERISTICS);
+    BLECharacteristic statusCharacteristic = service.characteristic(BLE_POWER_STATUS_CHARACTERISTICS);
 
     Serial.print("\tCharacteristic ");
-    Serial.println(characteristic.uuid());
-    Serial.printf("Characteristics size: %d\n", characteristic.valueSize());
-    Serial.printf("Characteristics can read: %d\n", characteristic.canRead());
+    Serial.println(controlCharacteristic.uuid());
+    Serial.printf("Characteristics size: %d\n", controlCharacteristic.valueSize());
+    Serial.printf("Characteristics can read: %d\n", controlCharacteristic.canRead());
+    Serial.println(statusCharacteristic.uuid());
+    Serial.printf("Characteristics size: %d\n", statusCharacteristic.valueSize());
+    Serial.printf("Characteristics can read: %d\n", statusCharacteristic.canRead());
 
     while (peripheral)
     {
-      const auto optInput = readCharacteristicValue(characteristic);
-      if(!optInput) {
+      digitalWrite(LED_BUILTIN, 1);
+
+      const auto optInput = readControl(controlCharacteristic);
+      if (!optInput)
+      {
         break;
       }
 
@@ -115,11 +133,17 @@ void loop()
       sum = (sum + valuesArray.size() / 2) / valuesArray.size();
 
       Serial.printf("Current adc %4d, power: %4d, steering: %4d\n", sum, input.powerPercent, input.steeringAngleDeg);
+
+      PowerStatus status{.motorCurrent_mA = sum, .usedEnergy_mAh = 7890, .batteryVoltage_mV = 1337};
+      sendStatus(statusCharacteristic, status);
+
+      delay(20);
     }
 
     powerServo.write(0);
+    digitalWrite(LED_BUILTIN, 0);
 
-    Serial.println("ble controller disconnected, stopping.");
+    Serial.println("ble remote disconnected, stopping.");
 
     Serial.println("Canning for service ...");
     BLE.scanForUuid(BLE_UUID);
