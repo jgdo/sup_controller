@@ -420,7 +420,9 @@ void loop()
 
       const auto input = *optInput;
 
-      setPower(input.powerPercent * 20, input.steeringAngleDeg);
+      const int powerNormalized = std::round(std::sqrt(input.powerPercent / 100.0F) * (DSHOT_THROTTLE_MAX-DSHOT_THROTTLE_MIN));
+
+      setPower(powerNormalized, input.steeringAngleDeg);
 #if USE_DSHOT
       steeringServo.write(input.steeringAngleDeg);
 #endif
