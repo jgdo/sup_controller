@@ -1,6 +1,6 @@
 #pragma once
 
-static constexpr auto BT_NAME_CONTOLLER = "sup_board_controller";
+static constexpr auto BT_NAME_REMOTE = "sup_remote";
 static constexpr auto BT_NAME_MOTOR = "sup_board_motor";
 
 static_assert(sizeof(unsigned int) == 4);
@@ -31,7 +31,7 @@ struct PowerStatus {
 };
 static_assert(sizeof(PowerStatus) == 16);
 
-static constexpr auto BLE_UUID = "91ef32e7-bdb7-45c8-9434-6bd2f665e2c3";
+static constexpr auto BLE_SERVICE_UUID = "9f7f1000-2c6d-4f42-8d18-19f0f8b00001";
 
-static constexpr auto BLE_CONTROL_CHARACTERISTICS = "2101";
-static constexpr auto BLE_POWER_STATUS_CHARACTERISTICS = "1210";
+static constexpr auto BLE_CONTROL_CHARACTERISTICS = "9f7f1001-2c6d-4f42-8d18-19f0f8b00001";
+static constexpr auto BLE_POWER_STATUS_CHARACTERISTICS = "9f7f1002-2c6d-4f42-8d18-19f0f8b00001";
