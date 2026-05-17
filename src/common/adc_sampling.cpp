@@ -13,7 +13,7 @@ Joystick::~Joystick()
 
 AnalogValue Joystick::read()
 {
-    const auto raw = mLastAvgValue.load();
+    const int raw = mLastAvgValue.load();
     const auto lastMillis = mLastSamplingMillis.load();
 
     const auto minValue = std::min(mMinValue, mMaxValue);

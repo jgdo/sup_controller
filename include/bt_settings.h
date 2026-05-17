@@ -35,3 +35,4 @@ static constexpr auto BLE_SERVICE_UUID = "9f7f1000-2c6d-4f42-8d18-19f0f8b00001";
 
 static constexpr auto BLE_CONTROL_CHARACTERISTICS = "9f7f1001-2c6d-4f42-8d18-19f0f8b00001";
 static constexpr auto BLE_POWER_STATUS_CHARACTERISTICS = "9f7f1002-2c6d-4f42-8d18-19f0f8b00001";
+static constexpr auto BLE_MOTOR_POWER_CHARACTERISTICS = "9f7f1003-2c6d-4f42-8d18-19f0f8b00001";

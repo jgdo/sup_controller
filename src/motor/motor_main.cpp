@@ -81,14 +81,19 @@ struct DshotFeedback
 std::mutex motorMutex;
 volatile MotorValue motorSetpointValue = {0, 90, 0};
 volatile DshotFeedback lastMotorFeedback;
+std::atomic<uint8_t> maxMotorPowerPercentage = 100;
+
+// ---- Multi-connection configuration ----------------------------------------
+// NimBLE must be built with enough connection slots. We also tell the stack
+// to keep advertising after a client connects so additional centrals can join.
+static constexpr uint8_t MAX_CONNECTIONS = 4;
 
 static NimBLEServer* bleServer = nullptr;
 static NimBLECharacteristic* commandCharacteristic = nullptr;
 static NimBLECharacteristic* statusCharacteristic = nullptr;
+static NimBLECharacteristic* moxPowerCharacteristic = nullptr;
 
-static bool remoteConnected = false;
 static unsigned long lastStatusSendMs = 0;
-static unsigned long lastCapacityUpdateMs = 0;
 static unsigned long lastLedToggleMs = 0;
 
 uint8_t update_crc8(uint8_t crc, uint8_t crc_seed)
@@ -206,8 +211,6 @@ class ServerCallbacks final : public NimBLEServerCallbacks
 public:
     void onConnect(NimBLEServer* server, NimBLEConnInfo& connInfo) override
     {
-        remoteConnected = server->getConnectedCount() > 0;
-
         server->updateConnParams(
             connInfo.getConnHandle(),
             bleMinConnectionInterval,
@@ -217,13 +220,15 @@ public:
 
         Serial.print("Remote connected: ");
         Serial.println(connInfo.getAddress().toString().c_str());
+
+        if (server->getConnectedCount() < MAX_CONNECTIONS) {
+            NimBLEDevice::startAdvertising();
+        }
     }
 
     void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override
     {
-        remoteConnected = server->getConnectedCount() > 0;
-
-        if (!remoteConnected)
+        if (!server->getConnectedCount())
         {
             setMotorControls(0, std::nullopt);
         }
@@ -259,41 +264,48 @@ public:
         Control control;
         memcpy(&control, value.data(), sizeof(Control));
 
+        const float powerFactor = std::min<int>(maxMotorPowerPercentage.load(), 100) / 100.0F;
+
         const int powerNormalized = std::round(
-                sqrt(control.powerPercent / 100.0F) * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN));
+                sqrt(control.powerPercent / 100.0F) * powerFactor * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN));
 
         setMotorControls(powerNormalized, control.steeringAngleDeg);
     }
 } chrCallbacks;
 
-void startAdvertising()
+class MaxPowerCharacteristicCallbacks final : public NimBLECharacteristicCallbacks
 {
-    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-
-    advertising->stop();
-    advertising->addServiceUUID(BLE_SERVICE_UUID);
-    advertising->setName(BT_NAME_MOTOR);
-    advertising->enableScanResponse(true);
-    advertising->start();
-
-    Serial.println("BLE motor service advertising");
-}
+public:
+    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override
+    {
+        const auto value = characteristic->getValue<uint8_t>();
+        maxMotorPowerPercentage.store(value);
+    }
+} maxPowerCallbacks;
 
 void setupBle()
 {
     NimBLEDevice::init(BT_NAME_MOTOR);
+    NimBLEDevice::setMTU(247);
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-    NimBLEServer* server = NimBLEDevice::createServer();
-    server->setCallbacks(&serverCallbacks);
+    bleServer = NimBLEDevice::createServer();
+    bleServer->setCallbacks(&serverCallbacks, false);
+    bleServer->advertiseOnDisconnect(true);
 
-    NimBLEService* service = server->createService(BLE_SERVICE_UUID);
+    NimBLEService* service = bleServer->createService(BLE_SERVICE_UUID);
 
     commandCharacteristic = service->createCharacteristic(
         BLE_CONTROL_CHARACTERISTICS,
         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-
     commandCharacteristic->setCallbacks(&chrCallbacks);
+
+    moxPowerCharacteristic = service->createCharacteristic(
+        BLE_MOTOR_POWER_CHARACTERISTICS,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY,
+        1);
+    moxPowerCharacteristic->setValue<uint8_t>(maxMotorPowerPercentage.load());
+    moxPowerCharacteristic->setCallbacks(&maxPowerCallbacks);
 
     statusCharacteristic = service->createCharacteristic(
         BLE_POWER_STATUS_CHARACTERISTICS,
@@ -310,13 +322,21 @@ void setupBle()
         reinterpret_cast<const uint8_t*>(&initialStatus),
         sizeof(initialStatus));
 
-    startAdvertising();
+
+
+    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+    advertising->addServiceUUID(BLE_SERVICE_UUID);
+    advertising->setName(BT_NAME_MOTOR);
+    advertising->enableScanResponse(true);
+    advertising->start();
+
+    Serial.println("BLE motor service advertising");
 }
 
 static void updateBluetoothStatusLed()
 {
     const unsigned long nowMs = millis();
-    const float blinkFrequencyHz = remoteConnected
+    const float blinkFrequencyHz = bleServer->getConnectedCount()
         ? bluetoothConnectedLedFrequencyHz
         : bluetoothWaitingLedFrequencyHz;
 
@@ -334,7 +354,7 @@ static void updateBluetoothStatusLed()
 
 void sendStatusIfNeeded()
 {
-    if (!remoteConnected || statusCharacteristic == nullptr)
+    if (!bleServer->getConnectedCount() || statusCharacteristic == nullptr)
     {
         return;
     }
