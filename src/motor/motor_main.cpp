@@ -278,8 +278,11 @@ class MaxPowerCharacteristicCallbacks final : public NimBLECharacteristicCallbac
 public:
     void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override
     {
-        const auto value = characteristic->getValue<uint8_t>();
+        const auto value = std::min<uint8_t>(characteristic->getValue<uint8_t>(), 100);
         maxMotorPowerPercentage.store(value);
+
+        characteristic->setValue<uint8_t>(value);
+        characteristic->notify();
     }
 } maxPowerCallbacks;
 
