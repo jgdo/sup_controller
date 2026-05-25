@@ -14,6 +14,7 @@
 static constexpr int STEERING_ADC_PIN = 33;
 static constexpr int PIN_POWER_ADC = 32;
 
+static constexpr int PIN_BUTTON_SIDE = 25;
 static constexpr int PIN_BUTTON_RIGHT = 26;
 static constexpr int PIN_BUTTON_LEFT = 27;
 
@@ -55,6 +56,9 @@ struct RemoteStatus
 };
 
 static RemoteStatus latestRemoteStatus;
+
+static bool inAutoPower = false;
+static float autoPowerSetValue = 0;
 
 void resetConnection()
 {
@@ -310,6 +314,19 @@ void updateDisplay()
     tft.println("                 ");
     tft.println("                 ");
   }
+
+  tft.setCursor(80, 50);
+  if (inAutoPower)
+  {
+    tft.setTextColor( TFT_RED, TFT_BLACK);
+    tft.print("A: ");
+    tft.setTextColor( TFT_WHITE, TFT_BLACK);
+    tft.printf("%3.0f", autoPowerSetValue);
+  }
+  else
+  {
+    tft.print("        ");
+  }
 }
 
 std::pair<bool, bool> readButtons()
@@ -354,6 +371,31 @@ void updateRemoteStatus()
 {
   latestRemoteStatus.steering = readSteering();
   latestRemoteStatus.power = powerJoystick.read();
+
+  const bool sidePressed = !digitalRead(PIN_BUTTON_SIDE);
+  static float minPowerValue = 0;
+
+  if (sidePressed)
+  {
+    inAutoPower = true;
+    autoPowerSetValue = minPowerValue = latestRemoteStatus.power.value;
+  }
+
+  if (inAutoPower) {
+    if (latestRemoteStatus.power.value < minPowerValue)
+    {
+      minPowerValue = latestRemoteStatus.power.value;
+    }
+    else if (latestRemoteStatus.power.value > minPowerValue+5)
+    {
+      inAutoPower = false;
+    }
+  }
+
+  if (inAutoPower)
+  {
+    latestRemoteStatus.power.value = autoPowerSetValue;
+  }
 }
 
 void sendRemoteCommand()
@@ -397,6 +439,7 @@ void setup()
 
   pinMode(PIN_BUTTON_RIGHT, INPUT_PULLUP);
   pinMode(PIN_BUTTON_LEFT, INPUT_PULLUP);
+  pinMode(PIN_BUTTON_SIDE, INPUT_PULLUP);
 
   tft.init();
   tft.setRotation(0);

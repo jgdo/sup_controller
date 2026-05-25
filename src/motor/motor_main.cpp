@@ -32,7 +32,7 @@ static constexpr float bluetoothWaitingLedFrequencyHz = 1.0f;
 static constexpr float bluetoothConnectedLedFrequencyHz = 5.0f;
 
 // Timing configuration.
-static constexpr unsigned long statusSendIntervalMs = 100;
+static constexpr unsigned long statusSendIntervalMs = 250;
 static constexpr unsigned long bluetoothCommandTimeoutMs = 300;
 
 static constexpr long POWER_RECEIVE_TIMEOUT_MS = 500;
@@ -127,7 +127,6 @@ std::tuple<int, int> getDshotMotorValueAndSteering()
     if ((lastVal.timestamp > ms) || (ms - lastVal.timestamp > DSHOT_LOOP_TIMEOUT_MS) || lastVal.power < 0 || lastVal.
         power > 2000)
     {
-        Serial.println("Invalid power or timeout from main thread!");
         return {DSHOT_THROTTLE_MIN, lastVal.servoSteeringAngle};
     }
 
@@ -267,7 +266,8 @@ public:
         const float powerFactor = std::min<int>(maxMotorPowerPercentage.load(), 100) / 100.0F;
 
         const int powerNormalized = std::round(
-                sqrt(control.powerPercent / 100.0F) * powerFactor * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN));
+                sqrt(control.powerPercent * powerFactor / 100.0F) * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN)
+        );
 
         setMotorControls(powerNormalized, control.steeringAngleDeg);
     }
@@ -324,8 +324,6 @@ void setupBle()
     statusCharacteristic->setValue(
         reinterpret_cast<const uint8_t*>(&initialStatus),
         sizeof(initialStatus));
-
-
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(BLE_SERVICE_UUID);
