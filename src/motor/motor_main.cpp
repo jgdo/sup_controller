@@ -34,11 +34,12 @@ static constexpr float bluetoothConnectedLedFrequencyHz = 5.0f;
 // Timing configuration.
 static constexpr unsigned long statusSendIntervalMs = 250;
 static constexpr unsigned long bluetoothCommandTimeoutMs = 300;
+static constexpr unsigned long currentSensorZeroAdjustDelayMs = 3000;
 
 static constexpr long POWER_RECEIVE_TIMEOUT_MS = 500;
 static constexpr float CONTROL_FREQ = 50.0f;
 
-static constexpr float V_PER_STEP = 0.006545;
+static constexpr float V_PER_STEP = 0.006815;
 
 // Low-latency BLE connection parameters.
 // Units for interval are 1.25 ms, so 6 = 7.5 ms and 12 = 15 ms.
@@ -57,7 +58,8 @@ Servo motorServo;
 
 constexpr auto DSHOT_LOOP_TIMEOUT_MS = 300;
 
-Joystick currentSensor_A{CURRENT_SENSING_ADC_PIN, 3642, 865, 70.0}; // WCS1700, 70A, 32mV/A
+static constexpr int CURRENT_SENSOR_ADC_DIFF = 2777;
+Joystick currentSensor_A{CURRENT_SENSING_ADC_PIN, 3370, 3370-CURRENT_SENSOR_ADC_DIFF, 70.0}; // WCS1700, 70A, 32mV/A
 Joystick batteryVoltageSensor_V{VOLTAGE_SENSING_ADC_PIN, 0, 4095, 4095 * V_PER_STEP};
 
 struct MotorValue
@@ -141,12 +143,33 @@ void dshotLoop()
 
         static int64_t consumption_mAus = 0; //  Millampere microseconds
         static int64_t lastTime_us = -1;
+        static unsigned long motorOffSinceMs = 0;
 
         motorServo.writeMicroseconds(1000 + (power - DSHOT_THROTTLE_MIN) / 2);
         steeringServo.write(steering);
 
         const auto current = currentSensor_A.read();
         const auto voltage = batteryVoltageSensor_V.read();
+
+        const unsigned long nowMs = millis();
+        if (power <= DSHOT_THROTTLE_MIN)
+        {
+            if (motorOffSinceMs == 0)
+            {
+                motorOffSinceMs = nowMs;
+            }
+            else if (nowMs - motorOffSinceMs > currentSensorZeroAdjustDelayMs)
+            {
+                currentSensor_A.mMinValue = currentSensor_A.mMinValue * 0.99f + (current.raw+4) * 0.01f; // 160ma offset for electronics
+                currentSensor_A.mMaxValue = currentSensor_A.mMinValue  - CURRENT_SENSOR_ADC_DIFF ;
+
+                // Serial.printf("za %d\n", current.raw);
+            }
+        }
+        else
+        {
+            motorOffSinceMs = 0;
+        }
 
         const int32_t current_mA = std::round(current.value * 1000.0f);
         const int32_t voltage_mV = std::round(voltage.value * 1000.0f);

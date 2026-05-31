@@ -22,13 +22,14 @@ public:
 
     AnalogValue read();
 
+    float mMinValue;
+    float mMaxValue;
+
 private:
     static constexpr auto AVG_BUFFER_SIZE = 32;
     static std::thread sThread;
 
     const int mAdcPin;
-    const float mMinValue;
-    const float mMaxValue;
     const float mRange;
 
     uint32_t mAvgSum = 0;

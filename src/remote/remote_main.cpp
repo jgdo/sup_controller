@@ -31,7 +31,7 @@ static constexpr uint16_t bleSlaveLatency = 0;
 static constexpr uint16_t bleSupervisionTimeout = 200;
 
 Joystick steeringJoystick{STEERING_ADC_PIN, 2600, 960, 180};
-Joystick powerJoystick{PIN_POWER_ADC, 1700, 950, 100};
+Joystick powerJoystick{PIN_POWER_ADC, 1680, 950, 100};
 
 static std::optional<PowerStatus> latestStatus;
 
@@ -371,6 +371,9 @@ void updateRemoteStatus()
 {
   latestRemoteStatus.steering = readSteering();
   latestRemoteStatus.power = powerJoystick.read();
+  if (latestRemoteStatus.power.value <= 3) {
+    latestRemoteStatus.power.value = 0;
+  };
 
   const bool sidePressed = !digitalRead(PIN_BUTTON_SIDE);
   static float minPowerValue = 0;
