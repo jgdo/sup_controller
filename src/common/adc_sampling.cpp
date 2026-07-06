@@ -15,7 +15,12 @@ AnalogValue Joystick::read()
 {
     const int raw = mLastAvgValue.load();
     const auto lastMillis = mLastSamplingMillis.load();
+    const auto value = convertRaw(raw);
 
+    return {raw, value, lastMillis};
+}
+
+float Joystick::convertRaw(int raw) const {
     const auto minValue = std::min(mMinValue, mMaxValue);
     const auto maxValue = std::max(mMinValue, mMaxValue);
 
@@ -34,7 +39,7 @@ AnalogValue Joystick::read()
         value = mRange - value;
     }
 
-    return {raw, value, lastMillis};
+    return value;
 }
 
 void Joystick::runSamplingLoop(unsigned long delay_ms)

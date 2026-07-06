@@ -30,6 +30,8 @@ static constexpr uint16_t bleMaxConnectionInterval = 12;
 static constexpr uint16_t bleSlaveLatency = 0;
 static constexpr uint16_t bleSupervisionTimeout = 200;
 
+static constexpr int AUTO_POWER_HYSTERESIS = 5;
+
 Joystick steeringJoystick{STEERING_ADC_PIN, 2600, 960, 180};
 Joystick powerJoystick{PIN_POWER_ADC, 1680, 950, 100};
 
@@ -59,6 +61,7 @@ static RemoteStatus latestRemoteStatus;
 
 static bool inAutoPower = false;
 static float autoPowerSetValue = 0;
+static bool inAutoPilot = false;
 
 void resetConnection()
 {
@@ -67,6 +70,9 @@ void resetConnection()
   bleConnected = false;
   commandCharacteristic = nullptr;
   statusCharacteristic = nullptr;
+
+  inAutoPilot = false;
+  inAutoPower = false;
 }
 
 class ScanCallbacks final : public NimBLEScanCallbacks
@@ -165,7 +171,8 @@ void connectToMotorController()
     if (!NimBLEDevice::getScan()->isScanning())
     {
       startMotorScan();
-    } else
+    }
+    else
     {
       Serial.println("Scan already in progress");
     }
@@ -215,7 +222,7 @@ void connectToMotorController()
   }
 
   commandCharacteristic =
-      service->getCharacteristic(BLE_CONTROL_CHARACTERISTICS);
+      service->getCharacteristic(BLE_REMOTE_COMMAND_CHARACTERISTICS);
 
   statusCharacteristic =
       service->getCharacteristic(BLE_POWER_STATUS_CHARACTERISTICS);
@@ -269,6 +276,7 @@ void updateDisplay()
   lastDisplayUpdateMs = nowMs;
 
   tft.setTextFont(2);
+  tft.setTextSize(1);
   tft.setCursor(0, 0);
 
   tft.setTextColor(bleConnected ? TFT_GREEN : TFT_RED, TFT_BLACK);
@@ -297,9 +305,9 @@ void updateDisplay()
 
   if (latestStatus)
   {
-    tft.printf("SUP mV: %4d    \n", latestStatus->batteryVoltage_mV);
-    tft.printf("SUP mA: %4d    \n", latestStatus->motorCurrent_mA);
-    tft.printf("SUP mAh: %4d    \n", latestStatus->usedEnergy_mAh);
+    tft.printf("SUP V: %2.2f    \n", latestStatus->batteryVoltage_mV / 1000.0);
+    tft.printf("SUP A: %2.2f    \n", latestStatus->motorCurrent_mA / 1000.0);
+    tft.printf("SUP Ah: %2.2f    \n", latestStatus->usedEnergy_mAh / 1000.0);
     const int watt = (int)latestStatus->batteryVoltage_mV * (int)latestStatus->motorCurrent_mA / 1000000;
     tft.printf("SUP Watt: %4d    \n", watt);
     tft.printf("SUP U adc: %4d\n", latestStatus->batteryVoltage_adc);
@@ -318,14 +326,26 @@ void updateDisplay()
   tft.setCursor(80, 50);
   if (inAutoPower)
   {
-    tft.setTextColor( TFT_RED, TFT_BLACK);
-    tft.print("A: ");
-    tft.setTextColor( TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.print("P: ");
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.printf("%3.0f", autoPowerSetValue);
   }
   else
   {
     tft.print("        ");
+  }
+
+  tft.setTextFont(4);
+  tft.setCursor(80, 85);
+   tft.setTextColor(TFT_RED, TFT_BLACK);
+  if (inAutoPilot)
+  {
+    tft.print("AP");
+  }
+  else
+  {
+    tft.print("       ");
   }
 }
 
@@ -354,42 +374,102 @@ AnalogValue readSteering()
   lastButtons = buttons;
 
   auto steering = steeringJoystick.read();
-  float angle  = (steering.value + steeringOffset - 90) / 90;
+  float angle = (steering.value + steeringOffset - 90) / 90;
   constexpr float expo = 1.5;
   if (angle < 0)
   {
     angle = -std::pow(-angle, expo);
-  } else
+  }
+  else
   {
     angle = std::pow(angle, expo);
   }
-  steering.value = std::clamp<float>(angle*90+90, 0, 180);
+  steering.value = std::clamp<float>(angle * 90 + 90, 0, 180);
   return steering;
+}
+
+int sidePressCount(bool pressed, bool reset = false)
+{
+  static int count = 0;
+  static long lastPress_ms = 0;
+  static bool lastPressed = false;
+
+  TODO debounce!
+
+  static constexpr long MAX_INTERVAL_MS = 500;
+
+  const auto now = millis();
+  const auto interval_ms = now - lastPress_ms;
+  const bool edge = pressed != lastPressed;
+
+  if (reset)
+  {
+    count = 0;
+  }
+  else if (edge)
+  {
+    if (interval_ms <= MAX_INTERVAL_MS)
+    {
+      if (!pressed)
+      {
+        count++;
+      }
+    } else {
+      count = 0;
+    }
+  }
+
+  lastPress_ms = now;
+  lastPressed = pressed;
+
+  return count;
 }
 
 void updateRemoteStatus()
 {
   latestRemoteStatus.steering = readSteering();
   latestRemoteStatus.power = powerJoystick.read();
-  if (latestRemoteStatus.power.value <= 3) {
+  if (latestRemoteStatus.power.value <= 3)
+  {
     latestRemoteStatus.power.value = 0;
   };
+  const bool powerApplied = latestRemoteStatus.power.value > 0;
 
   const bool sidePressed = !digitalRead(PIN_BUTTON_SIDE);
-  static float minPowerValue = 0;
 
-  if (sidePressed)
+  // Auto pilot handling
+  const int pressCount = sidePressCount(sidePressed, powerApplied);
+  if(pressCount == 3)
+  {
+    inAutoPilot = true;
+    sidePressCount(false, true); // reset
+  }
+
+  // get original joystick value without offset
+  const auto steeringPure = steeringJoystick.convertRaw(latestRemoteStatus.steering.raw) - 90.0f;
+  if(abs(steeringPure) > 5.0f)
+  {
+    if(inAutoPilot) {
+      inAutoPower = false; // disable auto power when disabling auto pilot
+    }
+    inAutoPilot = false;
+  }
+
+  // Auto power handling
+  static float minPowerValue = 0;
+  if (sidePressed && powerApplied)
   {
     inAutoPower = true;
     autoPowerSetValue = minPowerValue = latestRemoteStatus.power.value;
   }
 
-  if (inAutoPower) {
+  if (inAutoPower)
+  {
     if (latestRemoteStatus.power.value < minPowerValue)
     {
       minPowerValue = latestRemoteStatus.power.value;
     }
-    else if (latestRemoteStatus.power.value > minPowerValue+5)
+    else if (latestRemoteStatus.power.value > minPowerValue + AUTO_POWER_HYSTERESIS)
     {
       inAutoPower = false;
     }
@@ -417,9 +497,10 @@ void sendRemoteCommand()
 
   lastCommandSendMs = nowMs;
 
-  Control control;
+  RemoteCommand control;
   control.powerPercent = std::round(latestRemoteStatus.power.value);
   control.steeringAngleDeg = std::round(latestRemoteStatus.steering.value);
+  control.autopilotEnabled = inAutoPilot ? AUTOPILOT_ENABLE_TAG : 0;
 
   const bool writeOk = commandCharacteristic->writeValue(
       reinterpret_cast<const uint8_t *>(&control),

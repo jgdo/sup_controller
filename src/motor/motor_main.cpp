@@ -9,7 +9,6 @@
 #include <ThreeWire.h>
 #include <RtcDS1302.h>
 
-
 #define DSHOT_THROTTLE_MIN 48
 #define DSHOT_THROTTLE_MAX 2047
 
@@ -17,7 +16,6 @@
 #include "bt_settings.h"
 
 constexpr auto PIN_BLUE_LED = 8;
-
 
 static constexpr int CURRENT_SENSING_ADC_PIN = 0;
 static constexpr int VOLTAGE_SENSING_ADC_PIN = 1;
@@ -59,7 +57,7 @@ Servo motorServo;
 constexpr auto DSHOT_LOOP_TIMEOUT_MS = 300;
 
 static constexpr int CURRENT_SENSOR_ADC_DIFF = 2777;
-Joystick currentSensor_A{CURRENT_SENSING_ADC_PIN, 3370, 3370-CURRENT_SENSOR_ADC_DIFF, 70.0}; // WCS1700, 70A, 32mV/A
+Joystick currentSensor_A{CURRENT_SENSING_ADC_PIN, 3370, 3370 - CURRENT_SENSOR_ADC_DIFF, 70.0}; // WCS1700, 70A, 32mV/A
 Joystick batteryVoltageSensor_V{VOLTAGE_SENSING_ADC_PIN, 0, 4095, 4095 * V_PER_STEP};
 
 struct MotorValue
@@ -90,13 +88,36 @@ std::atomic<uint8_t> maxMotorPowerPercentage = 100;
 // to keep advertising after a client connects so additional centrals can join.
 static constexpr uint8_t MAX_CONNECTIONS = 4;
 
-static NimBLEServer* bleServer = nullptr;
-static NimBLECharacteristic* commandCharacteristic = nullptr;
-static NimBLECharacteristic* statusCharacteristic = nullptr;
-static NimBLECharacteristic* moxPowerCharacteristic = nullptr;
+static NimBLEServer *bleServer = nullptr;
+static NimBLECharacteristic *remoteCommandCharacteristic = nullptr;
+static NimBLECharacteristic *statusCharacteristic = nullptr;
+static NimBLECharacteristic *moxPowerCharacteristic = nullptr;
+static NimBLECharacteristic *autopilotControlCharacteristic = nullptr;
 
 static unsigned long lastStatusSendMs = 0;
 static unsigned long lastLedToggleMs = 0;
+
+static bool lastAutopilotFlag = false;
+static long lastRemoteCommandReceived_ms = 0;
+static uint8_t lastAutopilotPowerPercent = 0;
+static constexpr long REMOTE_COMMAND_AUTOPILOT_TIMEOUT_MS = 500;
+
+enum AutopilotState
+{
+    AUTOPILOT_DISABLED,
+    AUTOPILOT_ENABLED,
+    AUTOPILOT_TIMEOUT,
+};
+
+AutopilotState getAutopilotState()
+{
+    const auto nowMs = millis();
+    if ((lastRemoteCommandReceived_ms == 0) || (nowMs - lastRemoteCommandReceived_ms > REMOTE_COMMAND_AUTOPILOT_TIMEOUT_MS))
+    {
+        return AUTOPILOT_TIMEOUT;
+    }
+    return lastAutopilotFlag ? AUTOPILOT_ENABLED : AUTOPILOT_DISABLED;
+}
 
 uint8_t update_crc8(uint8_t crc, uint8_t crc_seed)
 {
@@ -108,7 +129,7 @@ uint8_t update_crc8(uint8_t crc, uint8_t crc_seed)
     return crc_u;
 }
 
-uint8_t get_crc8(uint8_t* Buf, uint8_t BufLen)
+uint8_t get_crc8(uint8_t *Buf, uint8_t BufLen)
 {
     uint8_t crc = 0, i;
     for (i = 0; i < BufLen; i++)
@@ -120,14 +141,12 @@ std::tuple<int, int> getDshotMotorValueAndSteering()
 {
     motorMutex.lock();
     const MotorValue lastVal = {
-        motorSetpointValue.power, motorSetpointValue.servoSteeringAngle, motorSetpointValue.timestamp
-    };
+        motorSetpointValue.power, motorSetpointValue.servoSteeringAngle, motorSetpointValue.timestamp};
     motorMutex.unlock();
 
     const auto ms = millis();
 
-    if ((lastVal.timestamp > ms) || (ms - lastVal.timestamp > DSHOT_LOOP_TIMEOUT_MS) || lastVal.power < 0 || lastVal.
-        power > 2000)
+    if ((lastVal.timestamp > ms) || (ms - lastVal.timestamp > DSHOT_LOOP_TIMEOUT_MS) || lastVal.power < 0 || lastVal.power > 2000)
     {
         return {DSHOT_THROTTLE_MIN, lastVal.servoSteeringAngle};
     }
@@ -160,8 +179,8 @@ void dshotLoop()
             }
             else if (nowMs - motorOffSinceMs > currentSensorZeroAdjustDelayMs)
             {
-                currentSensor_A.mMinValue = currentSensor_A.mMinValue * 0.99f + (current.raw+4) * 0.01f; // 160ma offset for electronics
-                currentSensor_A.mMaxValue = currentSensor_A.mMinValue  - CURRENT_SENSOR_ADC_DIFF ;
+                currentSensor_A.mMinValue = currentSensor_A.mMinValue * 0.99f + (current.raw + 4) * 0.01f; // 160ma offset for electronics
+                currentSensor_A.mMaxValue = currentSensor_A.mMinValue - CURRENT_SENSOR_ADC_DIFF;
 
                 // Serial.printf("za %d\n", current.raw);
             }
@@ -212,7 +231,7 @@ void setMotorControls(int power, std::optional<int> steering)
 
 std::thread dshotThread;
 
-void printDateTime(const RtcDateTime& dt)
+void printDateTime(const RtcDateTime &dt)
 {
     char datestring[20];
 
@@ -231,7 +250,7 @@ void printDateTime(const RtcDateTime& dt)
 class ServerCallbacks final : public NimBLEServerCallbacks
 {
 public:
-    void onConnect(NimBLEServer* server, NimBLEConnInfo& connInfo) override
+    void onConnect(NimBLEServer *server, NimBLEConnInfo &connInfo) override
     {
         server->updateConnParams(
             connInfo.getConnHandle(),
@@ -243,12 +262,13 @@ public:
         Serial.print("Remote connected: ");
         Serial.println(connInfo.getAddress().toString().c_str());
 
-        if (server->getConnectedCount() < MAX_CONNECTIONS) {
+        if (server->getConnectedCount() < MAX_CONNECTIONS)
+        {
             NimBLEDevice::startAdvertising();
         }
     }
 
-    void onDisconnect(NimBLEServer* server, NimBLEConnInfo& connInfo, int reason) override
+    void onDisconnect(NimBLEServer *server, NimBLEConnInfo &connInfo, int reason) override
     {
         if (!server->getConnectedCount())
         {
@@ -269,37 +289,80 @@ public:
     }
 } serverCallbacks;
 
-class CommandCharacteristicCallbacks final : public NimBLECharacteristicCallbacks
+int normalizePowerCommand(int powerPercent)
+{
+    const float powerFactor = std::min<int>(maxMotorPowerPercentage.load(), 100) / 100.0F;
+
+    const int powerNormalized = std::round(
+        sqrt(powerPercent * powerFactor / 100.0F) * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN));
+
+    return powerNormalized;
+}
+
+class RemoteCommandCharacteristicCallbacks final : public NimBLECharacteristicCallbacks
 {
 public:
-    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) override
     {
         const auto value = characteristic->getValue();
 
-        if (value.size() != sizeof(Control))
+        if (value.size() != sizeof(RemoteCommand))
         {
             Serial.print("Invalid remote command packet from ");
             Serial.println(connInfo.getAddress().toString().c_str());
             return;
         }
 
-        Control control;
-        memcpy(&control, value.data(), sizeof(Control));
+        RemoteCommand command;
+        memcpy(&command, value.data(), sizeof(RemoteCommand));
+        lastAutopilotFlag = command.autopilotEnabled == AUTOPILOT_ENABLE_TAG;
+        lastAutopilotPowerPercent = command.powerPercent;
+        lastRemoteCommandReceived_ms = millis();
 
-        const float powerFactor = std::min<int>(maxMotorPowerPercentage.load(), 100) / 100.0F;
-
-        const int powerNormalized = std::round(
-                sqrt(control.powerPercent * powerFactor / 100.0F) * (DSHOT_THROTTLE_MAX - DSHOT_THROTTLE_MIN)
-        );
-
-        setMotorControls(powerNormalized, control.steeringAngleDeg);
+        if (!lastAutopilotFlag)
+        {
+            setMotorControls(normalizePowerCommand(command.powerPercent), command.steeringAngleDeg);
+        } // Otherwise let autopilot control
     }
-} chrCallbacks;
+} remoteCommandCallbacks;
+
+class AutopilotControlCharacteristicCallbacks final : public NimBLECharacteristicCallbacks
+{
+public:
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) override
+    {
+        const auto value = characteristic->getValue();
+
+        if (value.size() != sizeof(AutopilotCommand))
+        {
+            Serial.print("Invalid autopilot command packet from ");
+            Serial.println(connInfo.getAddress().toString().c_str());
+            return;
+        }
+
+        AutopilotCommand command;
+        memcpy(&command, value.data(), sizeof(AutopilotCommand));
+
+        switch (getAutopilotState())
+        {
+        case AUTOPILOT_ENABLED:
+            setMotorControls(normalizePowerCommand(std::min(command.powerPercent, lastAutopilotPowerPercent)), command.steeringAngleDeg);
+            break;
+            
+        case AUTOPILOT_TIMEOUT:
+            setMotorControls(0, std::nullopt);
+            break;
+
+        default:
+            break;
+        }
+    }
+} autopilotControlCallbacks;
 
 class MaxPowerCharacteristicCallbacks final : public NimBLECharacteristicCallbacks
 {
 public:
-    void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &connInfo) override
     {
         const auto value = std::min<uint8_t>(characteristic->getValue<uint8_t>(), 100);
         maxMotorPowerPercentage.store(value);
@@ -319,15 +382,20 @@ void setupBle()
     bleServer->setCallbacks(&serverCallbacks, false);
     bleServer->advertiseOnDisconnect(true);
 
-    NimBLEService* service = bleServer->createService(BLE_SERVICE_UUID);
+    NimBLEService *service = bleServer->createService(BLE_SERVICE_UUID);
 
-    commandCharacteristic = service->createCharacteristic(
-        BLE_CONTROL_CHARACTERISTICS,
+    remoteCommandCharacteristic = service->createCharacteristic(
+        BLE_REMOTE_COMMAND_CHARACTERISTICS,
         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    commandCharacteristic->setCallbacks(&chrCallbacks);
+    remoteCommandCharacteristic->setCallbacks(&remoteCommandCallbacks);
+
+    autopilotControlCharacteristic = service->createCharacteristic(
+        BLE_AUTOPILOT_CONTROL_CHARACTERISTICS,
+        NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    autopilotControlCharacteristic->setCallbacks(&autopilotControlCallbacks);
 
     moxPowerCharacteristic = service->createCharacteristic(
-        BLE_MOTOR_POWER_CHARACTERISTICS,
+        BLE_MAX_POWER_CHARACTERISTICS,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY,
         1);
     moxPowerCharacteristic->setValue<uint8_t>(maxMotorPowerPercentage.load());
@@ -345,7 +413,7 @@ void setupBle()
         .motorCurrent_adc = 0,
     };
     statusCharacteristic->setValue(
-        reinterpret_cast<const uint8_t*>(&initialStatus),
+        reinterpret_cast<const uint8_t *>(&initialStatus),
         sizeof(initialStatus));
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
@@ -361,8 +429,8 @@ static void updateBluetoothStatusLed()
 {
     const unsigned long nowMs = millis();
     const float blinkFrequencyHz = bleServer->getConnectedCount()
-        ? bluetoothConnectedLedFrequencyHz
-        : bluetoothWaitingLedFrequencyHz;
+                                       ? bluetoothConnectedLedFrequencyHz
+                                       : bluetoothWaitingLedFrequencyHz;
 
     const unsigned long toggleIntervalMs =
         static_cast<unsigned long>(1000.0f / (blinkFrequencyHz * 2.0f));

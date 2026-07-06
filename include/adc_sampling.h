@@ -21,6 +21,7 @@ public:
     ~Joystick();
 
     AnalogValue read();
+    float convertRaw(int raw) const;
 
     float mMinValue;
     float mMaxValue;
